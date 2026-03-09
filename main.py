@@ -147,7 +147,7 @@ def extrair_tabela_pdf(uploaded_file):
 # STREAMLIT APP - LAYOUT + TODAS AS FUNCIONALIDADES DO TKINTER
 # =====================================================
 st.set_page_config(page_title="Correção Monetária - ERP", layout="wide")
-st.title("🏢 Automação para Correção Monetária (versão - 1.0")
+st.title("🏢 Automação para Correção Monetária (versão - 1.0)"
 
 # Session State
 if "raw_df" not in st.session_state: st.session_state.raw_df = None
@@ -491,6 +491,7 @@ elif st.session_state.raw_df is not None:
     st.dataframe(st.session_state.raw_df, use_container_width=True, height=720, hide_index=True)
 else:
     st.info("Extraia o PDF no Passo 1 para começar.")
+
 
 
 
