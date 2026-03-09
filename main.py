@@ -7,6 +7,7 @@ from datetime import datetime
 from functools import reduce
 from operator import mul
 from io import BytesIO
+import os
 
 import streamlit as st
 
@@ -84,13 +85,20 @@ def calcular_meses_diff(yyyymm1, yyyymm2):
 
 def carregar_icgj():
     try:
-        df = pd.read_csv("ICGJ.CSV")
+        base_dir = os.path.dirname(__file__)
+        caminho = os.path.join(base_dir, "ICGJ.CSV")
+
+        df = pd.read_csv(caminho)
+
         df["Referencia_yyyymm"] = df["Referencia_yyyymm"].astype(str)
         df["Indice"] = df["Indice"].astype(str).str.replace(",", ".").astype(float)
+
         return df[["Referencia_yyyymm", "Indice"]]
+
     except Exception as e:
         st.error(f"Erro ao carregar ICGJ.CSV: {e}")
         return pd.DataFrame(columns=["Referencia_yyyymm", "Indice"])
+        
 
 def consultar_bacen_fator(codigo, data_ref, data_final=None, tentativas=3, delay=3):
     if data_final is None: data_final = datetime.today().strftime("%d/%m/%Y")
@@ -483,4 +491,5 @@ elif st.session_state.raw_df is not None:
     st.dataframe(st.session_state.raw_df, use_container_width=True, height=720, hide_index=True)
 else:
     st.info("Extraia o PDF no Passo 1 para começar.")
+
 
