@@ -86,7 +86,7 @@ def calcular_meses_diff(yyyymm1, yyyymm2):
 def carregar_icgj():
     try:
         base_dir = os.path.dirname(__file__)
-        caminho = os.path.join(base_dir, "ICGJ.CSV")
+        caminho = os.path.join(base_dir, "ICGJ.csv")
 
         df = pd.read_csv(caminho)
 
@@ -96,7 +96,7 @@ def carregar_icgj():
         return df[["Referencia_yyyymm", "Indice"]]
 
     except Exception as e:
-        st.error(f"Erro ao carregar ICGJ.CSV: {e}")
+        st.error(f"Erro ao carregar ICGJ.csv: {e}")
         return pd.DataFrame(columns=["Referencia_yyyymm", "Indice"])
         
 
@@ -491,5 +491,6 @@ elif st.session_state.raw_df is not None:
     st.dataframe(st.session_state.raw_df, use_container_width=True, height=720, hide_index=True)
 else:
     st.info("Extraia o PDF no Passo 1 para começar.")
+
 
 
