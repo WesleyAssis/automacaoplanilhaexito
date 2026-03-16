@@ -27,10 +27,9 @@ COLUMN_VARIANTS = {
 }
 
 # =====================================================
-# UTILITÁRIOS (100% iguais ao Tkinter + melhorias do segundo código)
+# UTILITÁRIOS
 # =====================================================
 def yyyymm_para_data_bacen(yyyymm):
-    """ Converte '202012' → '01/12/2020' """
     if not yyyymm or len(yyyymm) != 6 or not yyyymm.isdigit():
         return None
     ano = yyyymm[:4]
@@ -58,9 +57,9 @@ def eh_mes_ano(valor):
     return bool(re.match(r"^(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)/\d{4}$", str(valor).lower().strip()))
 
 def tratar_postes(valor):
-    if pd.isna(valor): return ""
+    if pd.isna(valor): return 0
     texto = str(valor).replace(" ", "").replace(".", "").replace(",", "")
-    return texto if texto.isdigit() else ""
+    return int(texto) if texto.isdigit() else 0
 
 def tratar_numero(valor):
     if pd.isna(valor): return 0.0
@@ -87,44 +86,102 @@ def carregar_icgj():
     try:
         base_dir = os.path.dirname(__file__)
         caminho = os.path.join(base_dir, "ICGJ.csv")
-
         df = pd.read_csv(caminho)
-
-        df["Referencia_yyyymm"] = df["Referencia_yyyymm"].astype(str)
+        df["Referencia_yyyymm"] = df["Referencia_yyyymm"].astype(str).str.strip()
         df["Indice"] = df["Indice"].astype(str).str.replace(",", ".").astype(float)
-
         return df[["Referencia_yyyymm", "Indice"]]
-
     except Exception as e:
         st.error(f"Erro ao carregar ICGJ.csv: {e}")
         return pd.DataFrame(columns=["Referencia_yyyymm", "Indice"])
-        
 
-def consultar_bacen_fator(codigo, data_ref, data_final=None, tentativas=3, delay=3):
-    if data_final is None: data_final = datetime.today().strftime("%d/%m/%Y")
-    if not data_ref: return None
+def recalcular_icgj(df):
+    """
+    Calcula o ICGJ linha a linha usando dicionário.
+    Prioridade: referencia_pgto → referencia → 1.0 (neutro, sem correção)
+    """
+    if df is None or df.empty:
+        return df
+
+    df = df.copy()
+
+    icgj_df = carregar_icgj()
+    if icgj_df.empty:
+        df["ICGJ"] = 1.0
+        return df
+
+    # Dicionário rápido: Referencia_yyyymm → Indice
+    icgj_dict = dict(zip(icgj_df["Referencia_yyyymm"], icgj_df["Indice"]))
+
+    def obter_icgj(row):
+        # Prioridade 1: referencia_pgto
+        ref_pgto = row.get("referencia_pgto")
+        if pd.notna(ref_pgto):
+            ref_pgto_str = str(ref_pgto).strip()
+            if ref_pgto_str and ref_pgto_str != "" and ref_pgto_str in icgj_dict:
+                return icgj_dict[ref_pgto_str]
+
+        # Prioridade 2: referencia
+        ref = row.get("referencia")
+        if pd.notna(ref):
+            ref_str = str(ref).strip()
+            if ref_str and ref_str != "" and ref_str in icgj_dict:
+                return icgj_dict[ref_str]
+
+        # Nenhum encontrado → retorna 1.0 (sem correção)
+        return 1.0
+
+    df["ICGJ"] = df.apply(obter_icgj, axis=1)
+    return df
+
+def consultar_bacen_fator(codigo, data_ref, data_final=None, tentativas=3, delay=3, considerar_negativo=False):
+    if data_final is None:
+        data_final = datetime.today().strftime("%d/%m/%Y")
+    
+    if not data_ref:
+        return 1.0  # neutro se data inválida
+
     for tentativa in range(tentativas):
         try:
             url = f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.{codigo}/dados?formato=json&dataInicial={data_ref}&dataFinal={data_final}"
             r = requests.get(url, timeout=10)
             r.raise_for_status()
             dados = r.json()
-            if not dados: return None
+            
+            if not dados:  # API retornou lista vazia → período futuro ou sem dados
+                return 1.0
+                
             fatores = [1 + float(d["valor"].replace(",", ".")) / 100 for d in dados]
-            return round(reduce(mul, fatores, 1), 8)
+            resultado = round(reduce(mul, fatores, 1), 8)
+            
+            # Só força 1.0 quando o checkbox está marcado
+            if considerar_negativo and resultado < 1:
+                return 1.0
+                
+            return resultado
+            
         except Exception:
             time.sleep(delay)
-    return None
+    
+    # Após todas tentativas falharem (ex: erro de rede persistente)
+    return 1.0
 
-def obter_ipca(d):   return consultar_bacen_fator(433, converter_data_para_bacen(d))
-def obter_igpm(d):   return consultar_bacen_fator(189, converter_data_para_bacen(d))
-def obter_igpdi(d):  return consultar_bacen_fator(190, converter_data_para_bacen(d))
+def obter_ipca(d, considerar_negativo=False):   
+    return consultar_bacen_fator(433, converter_data_para_bacen(d), considerar_negativo=considerar_negativo)
+
+def obter_igpm(d, considerar_negativo=False):   
+    return consultar_bacen_fator(189, converter_data_para_bacen(d), considerar_negativo=considerar_negativo)
+
+def obter_igpdi(d, considerar_negativo=False):  
+    return consultar_bacen_fator(190, converter_data_para_bacen(d), considerar_negativo=considerar_negativo)
 
 def converter_data_para_bacen(valor):
     try:
-        if pd.isna(valor): return None
+        if pd.isna(valor) or valor == "" or valor is None:
+            return None
         data = pd.to_datetime(valor, dayfirst=True, errors="coerce")
-        return data.strftime("%d/%m/%Y") if pd.notna(data) else None
+        if pd.isna(data):
+            return None
+        return data.strftime("%d/%m/%Y")
     except Exception:
         return None
 
@@ -143,8 +200,25 @@ def extrair_tabela_pdf(uploaded_file):
         raise Exception("Nenhuma tabela encontrada")
     return pd.concat(tabelas, ignore_index=True)
 
+def corrigir_tipos(df):
+    if df is None or df.empty:
+        return df
+    df = df.copy()
+    if "Número de Postes" in df.columns:
+        df["Número de Postes"] = pd.to_numeric(df["Número de Postes"], errors="coerce").fillna(0).astype(int)
+    for col in ["Preço que estava sendo cobrado pela CEMIG", "Preço conquistado na AÇÃO",
+                "Valor conquistado na AÇÃO", "Valor CEMIG", "Benefício Econômico"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+    for col in ["IPCA", "IGPM", "IGPDI", "ICGJ", "Corrigido IPCA", "Corrigido IGPM", "Corrigido IGPDI", "Corrigido ICGJ",
+                "Honorários IPCA", "Honorários IGPM", "Honorários IGPDI", "Honorários ICGJ"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+    return df
+
+
 # =====================================================
-# STREAMLIT APP - LAYOUT + TODAS AS FUNCIONALIDADES DO TKINTER
+# STREAMLIT APP
 # =====================================================
 st.set_page_config(page_title="Correção Monetária - ERP", layout="wide")
 st.title("🏢 Automação para Correção Monetária (versão - 1.0)")
@@ -154,43 +228,32 @@ if "raw_df" not in st.session_state: st.session_state.raw_df = None
 if "df" not in st.session_state: st.session_state.df = None
 if "df_original" not in st.session_state: st.session_state.df_original = None
 if "references" not in st.session_state: st.session_state.references = [""]
-if "current_step" not in st.session_state: st.session_state.current_step = "1️⃣ Passo 1 - Extrair PDF"
 
-# ====================== BARRA DE NAVEGAÇÃO HORIZONTAL ======================
+if "current_step" not in st.session_state:
+    st.session_state.current_step = "1️⃣ Passo 1 - Extrair PDF"
+
+# ====================== BARRA DE NAVEGAÇÃO ======================
 st.markdown("### 📍 Passos do Processo")
-col1, col2, col3, col4 = st.columns(4, gap="small")
+col1, col2, col3, col4, col5 = st.columns(5, gap="small")
 
 steps = [
     ("1️⃣ Passo 1 - Extrair PDF", "1️⃣"),
     ("2️⃣ Passo 2 - Processar Colunas", "2️⃣"),
-    ("3️⃣ Passo 3 - Parâmetros da Análise", "3️⃣"),
-    ("4️⃣ Passo 4 - Consultar BACEN & Exportar", "4️⃣")
+    ("3️⃣ Passo 3 - Projetar Parcelas", "3️⃣"),
+    ("4️⃣ Passo 4 - Parâmetros da Análise", "4️⃣"),
+    ("5️⃣ Passo 5 - Consultar BACEN & Exportar", "5️⃣")
 ]
 
 current_step = st.session_state.get("current_step", "1️⃣ Passo 1 - Extrair PDF")
 
-with col1:
-    if st.button(steps[0][0], use_container_width=True, type=("secondary" if not current_step.startswith(steps[0][1]) else "primary")):
-        st.session_state.current_step = steps[0][0]
-        st.rerun()
-
-with col2:
-    if st.button(steps[1][0], use_container_width=True, type=("secondary" if not current_step.startswith(steps[1][1]) else "primary")):
-        st.session_state.current_step = steps[1][0]
-        st.rerun()
-
-with col3:
-    if st.button(steps[2][0], use_container_width=True, type=("secondary" if not current_step.startswith(steps[2][1]) else "primary")):
-        st.session_state.current_step = steps[2][0]
-        st.rerun()
-
-with col4:
-    if st.button(steps[3][0], use_container_width=True, type=("secondary" if not current_step.startswith(steps[3][1]) else "primary")):
-        st.session_state.current_step = steps[3][0]
-        st.rerun()
+for i, (label, emoji) in enumerate(steps):
+    with [col1, col2, col3, col4, col5][i]:
+        if st.button(label, use_container_width=True,
+                     type="primary" if current_step.startswith(emoji) else "secondary"):
+            st.session_state.current_step = label
+            st.rerun()
 
 st.divider()
-current_step = st.session_state.get("current_step", "1️⃣ Passo 1 - Extrair PDF")
 
 # ====================== PASSO 1 ======================
 if current_step.startswith("1️⃣"):
@@ -208,7 +271,7 @@ if current_step.startswith("1️⃣"):
             except Exception as e:
                 st.error(f"Erro na extração: {e}")
 
-# ====================== PASSO 2 ======================
+# ====================== PASSO 2 - PROCESSAR COLUNAS ======================
 elif current_step.startswith("2️⃣"):
     st.subheader("2️⃣ Passo 2 - Processar Colunas")
     if st.session_state.raw_df is None:
@@ -219,14 +282,13 @@ elif current_step.startswith("2️⃣"):
                 with st.spinner("Processando..."):
                     df = st.session_state.raw_df.copy()
 
-                    # Renomear colunas (igual ao Tkinter)
                     for standard, variants in COLUMN_VARIANTS.items():
                         for col in list(df.columns):
                             if col in variants:
                                 df.rename(columns={col: standard}, inplace=True)
                                 break
 
-                    df["Número de Postes"] = df.get("Pontos", pd.Series()).apply(tratar_postes).apply(lambda x: int(x) if str(x).isdigit() else 0)
+                    df["Número de Postes"] = df.get("Pontos", pd.Series()).apply(tratar_postes)
                     col_preco = "Preço Pto."
                     df["Preço que estava sendo cobrado pela CEMIG"] = df.get(col_preco, pd.Series()).apply(tratar_numero)
                     df["Preço conquistado na AÇÃO"] = df.get(col_preco, pd.Series()).apply(tratar_numero)
@@ -239,25 +301,23 @@ elif current_step.startswith("2️⃣"):
 
                     df = df[df["Mês referência/Ano cobrança"].apply(eh_mes_ano) & (df["referencia"] != "")].reset_index(drop=True)
 
-                    df = df.merge(carregar_icgj(), left_on="referencia_pgto", right_on="Referencia_yyyymm", how="left")
-                    df.rename(columns={"Indice": "ICGJ"}, inplace=True)
-                    df.drop(columns=["Referencia_yyyymm"], errors="ignore", inplace=True)
+                    df = recalcular_icgj(df)
 
                     for c in ["IPCA","IGPM","IGPDI"]: df[c] = pd.Series(dtype=float)
-                    df["ICGJ"] = df["ICGJ"].fillna(0.0)
                     for c in ["Corrigido IPCA","Corrigido IGPM","Corrigido IGPDI","Corrigido ICGJ"]: df[c] = 0.0
+                    for c in ["Honorários IPCA","Honorários IGPM","Honorários IGPDI","Honorários ICGJ"]: df[c] = 0.0
 
                     col_order = ["Mês referência/Ano cobrança","referencia","Pagamento","referencia_pgto","Número de Postes",
                                  "Preço que estava sendo cobrado pela CEMIG","Preço conquistado na AÇÃO",
                                  "Valor conquistado na AÇÃO","Valor CEMIG","Benefício Econômico",
-                                 "IPCA","IGPM","IGPDI","ICGJ","Corrigido IPCA","Corrigido IGPM","Corrigido IGPDI","Corrigido ICGJ"]
+                                 "IPCA","IGPM","IGPDI","ICGJ","Corrigido IPCA","Corrigido IGPM","Corrigido IGPDI","Corrigido ICGJ",
+                                 "Honorários IPCA","Honorários IGPM","Honorários IGPDI","Honorários ICGJ"]
                     df = df[[c for c in col_order if c in df.columns]]
                     df = df.sort_values("referencia").reset_index(drop=True)
 
-                    st.session_state.df = df
-                    st.session_state.df_original = df.copy()
+                    st.session_state.df = corrigir_tipos(df)
+                    st.session_state.df_original = st.session_state.df.copy()
 
-                    # Ordenar referências pela coluna "referencia" (YYYYMM) ao invés de alfabéticamente
                     refs = df.drop_duplicates(subset=["Mês referência/Ano cobrança"], keep="first")["Mês referência/Ano cobrança"].tolist()
                     st.session_state.references = [""] + refs
 
@@ -265,48 +325,93 @@ elif current_step.startswith("2️⃣"):
             except Exception as e:
                 st.error(f"Erro no processamento: {e}")
 
-# ====================== PASSO 3 - PARÂMETROS (LAYOUT OTIMIZADO) ======================
+# ====================== PASSO 3 - PROJETAR PARCELAS ======================
 elif current_step.startswith("3️⃣"):
-    st.subheader("3️⃣ Passo 3 - Parâmetros da Análise")
+    st.subheader("3️⃣ Passo 3 - Projetar Parcelas")
+
+    if st.session_state.df is None or st.session_state.df.empty:
+        st.warning("Conclua o Passo 2 primeiro.")
+    else:
+        st.markdown("##### Adicionar parcelas futuras automaticamente")
+
+        st.write("**Quantidade de novas parcelas a projetar:**")
+        col_qty, col_add, col_del = st.columns([1, 1, 1])
+        with col_qty:
+            quantidade = st.number_input("", min_value=1, value=6, step=1, label_visibility="collapsed")
+        with col_add:
+            if st.button("➕ Adicionar", type="primary", use_container_width=True):
+                try:
+                    ultima_referencia = st.session_state.df["referencia"].iloc[-1]
+                    ultima_linha = st.session_state.df.iloc[-1].copy()
+
+                    novas_linhas = []
+                    referencia_atual = ultima_referencia
+
+                    for _ in range(quantidade):
+                        referencia_atual = add_meses_yyyymm(referencia_atual, 1)
+                        nova_linha = ultima_linha.copy()
+                        mes_nome = list(MESES.keys())[int(referencia_atual[4:]) - 1]
+                        ano = referencia_atual[:4]
+                        nova_linha["Mês referência/Ano cobrança"] = f"{mes_nome}/{ano}"
+                        nova_linha["referencia"] = referencia_atual
+                        nova_linha["Pagamento"] = ""
+                        nova_linha["referencia_pgto"] = ""
+
+                        for col in ["IPCA", "IGPM", "IGPDI", "Corrigido IPCA", "Corrigido IGPM", "Corrigido IGPDI", "Corrigido ICGJ",
+                                    "Honorários IPCA", "Honorários IGPM", "Honorários IGPDI", "Honorários ICGJ"]:
+                            if col in nova_linha:
+                                nova_linha[col] = 0.0
+
+                        novas_linhas.append(nova_linha)
+
+                    df_novo = pd.DataFrame(novas_linhas)
+                    st.session_state.df = pd.concat([st.session_state.df, df_novo], ignore_index=True)
+                    st.session_state.df = st.session_state.df.sort_values("referencia").reset_index(drop=True)
+
+                    st.session_state.df = recalcular_icgj(st.session_state.df)
+                    st.session_state.df = corrigir_tipos(st.session_state.df)
+
+                    st.success(f"✅ {quantidade} novas parcelas adicionadas com ICGJ atualizado!")
+                    st.rerun()
+
+                except Exception as e:
+                    st.error(f"Erro ao adicionar parcelas: {e}")
+
+        with col_del:
+            if st.button("🗑️ Excluir Todas as Parcelas Projetadas", type="secondary", use_container_width=True):
+                if len(st.session_state.df) > len(st.session_state.df_original):
+                    st.session_state.df = st.session_state.df_original.copy().reset_index(drop=True)
+                    st.session_state.df = corrigir_tipos(st.session_state.df)
+                    st.success("✅ Todas as parcelas projetadas foram excluídas!")
+                    st.rerun()
+                else:
+                    st.info("Não há parcelas projetadas para excluir.")
+
+# ====================== PASSO 4 - PARÂMETROS DA ANÁLISE ======================
+elif current_step.startswith("4️⃣"):
+    st.subheader("4️⃣ Passo 4 - Parâmetros da Análise")
     if st.session_state.df is None:
         st.warning("Conclua o Passo 2 primeiro.")
     else:
-        # Variável compartilhada para ambas as abas
-        considerar_negativo = st.checkbox("✓ Considerar Índices Negativos em ambas as operações?", value=False, key="considerar_neg_global")
-        
+        considerar_negativo = st.session_state.get("considerar_neg_global", False)
         st.divider()
 
-        # TABS para separar as 3 seções
         tab1, tab2, tab3 = st.tabs(["🔍 Filtro Geral", "💰 Fornecedor (CEMIG)", "✅ Valor Conquistado"])
 
-        # ==== TAB 1: FILTRO GERAL ====
         with tab1:
             st.markdown("##### Filtrar dados a partir de uma referência específica")
-            
-            # Selectbox mais compacto
-            col_select, col_spacer = st.columns([1.2, 2.8])
+            col_select, _ = st.columns([1.2, 2.8])
             with col_select:
                 filtro_referencia = st.selectbox("Referência inicial:", st.session_state.references, key="filtro_ref")
             
-            # Botão na linha debaixo, alinhado à esquerda (seguindo padrão)
-            col_button_left, col_spacer_right = st.columns([1.2, 2.8])
-            with col_button_left:
+            col_button, _ = st.columns([1.2, 2.8])
+            with col_button:
                 if st.button("🔄 Aplicar Filtro", type="secondary", use_container_width=True):
                     if filtro_referencia:
                         ref_base = converter_referencia_yyyymm(filtro_referencia)
-                        df_original_count = len(st.session_state.df_original)
-                        
-                        df_filtrado = st.session_state.df_original[
-                            (st.session_state.df_original["referencia_pgto"] != "") & 
-                            (st.session_state.df_original["referencia"] >= ref_base)
-                        ].copy().reset_index(drop=True)
+                        df_filtrado = st.session_state.df[st.session_state.df["referencia"] >= ref_base].copy().reset_index(drop=True)
 
-                        # Lógica de congelamento do preço (exatamente como no Tkinter)
-                        df_anterior = st.session_state.df_original[
-                            (st.session_state.df_original["referencia_pgto"] != "") &
-                            (st.session_state.df_original["referencia"] < ref_base)
-                        ].sort_values("referencia")
-
+                        df_anterior = st.session_state.df[st.session_state.df["referencia"] < ref_base].sort_values("referencia")
                         if not df_anterior.empty:
                             preco_congelado = df_anterior.iloc[-1]["Preço que estava sendo cobrado pela CEMIG"]
                             df_filtrado["Preço que estava sendo cobrado pela CEMIG"] = preco_congelado
@@ -314,20 +419,11 @@ elif current_step.startswith("3️⃣"):
                             df_filtrado["Benefício Econômico"] = (df_filtrado["Valor CEMIG"] - df_filtrado["Valor conquistado na AÇÃO"]).round(2)
 
                         st.session_state.df = df_filtrado.sort_values("referencia").reset_index(drop=True)
-                        registros_filtrados = len(df_filtrado)
-                        registros_excluidos = df_original_count - registros_filtrados
-                        st.success(f"✅ Filtro aplicado! {registros_filtrados} registros considerados, {registros_excluidos} excluídos.")
-                    else:
-                        st.warning("Selecione uma referência válida.")
+                        st.session_state.df = corrigir_tipos(st.session_state.df)
+                        st.success(f"✅ Filtro aplicado!")
 
-            with st.expander("ℹ️ Sobre o filtro", expanded=False):
-                st.caption("Este filtro permite aplicar um corte temporal nos dados. Valores anteriores à referência selecionada serão congelados no último preço registrado (Price Freeze).")
-
-        # ==== TAB 2: FORNECEDOR ====
         with tab2:
             st.markdown("##### Configurar preço do fornecedor (CEMIG)")
-            
-            # Linha 1: Marco Fornecedor | Valor | Índice
             col_m, col_v, col_i = st.columns([1.2, 1, 1.3])
             with col_m:
                 marco_fornecedor = st.selectbox("📅 Marco Fornecedor:", st.session_state.references, key="marco_forn")
@@ -336,52 +432,51 @@ elif current_step.startswith("3️⃣"):
             with col_i:
                 indice_fornecedor = st.selectbox("📊 Índice:", ["IPCA", "IGPM", "IGP-DI", "ICGJ", "Outros"], key="ind_forn")
             
-            # Linha 2: Botão de atualização (alinhado à esquerda)
-            col_button_left, col_spacer_right = st.columns([1.2, 2.8])
-            with col_button_left:
-                if st.button("🚀 Atualizar Fornecedor", type="primary", use_container_width=True):
-                    if valor_fornecedor <= 0:
-                        st.warning("❌ Valor do Fornecedor deve ser maior que zero.")
-                    else:
-                        marco_yyyymm = converter_referencia_yyyymm(marco_fornecedor)
-                        preco_atual = valor_fornecedor
-                        bloco_anterior = 0
-                        with st.spinner("Atualizando preço FORNECEDOR em blocos de 12 meses..."):
-                            for i, row in st.session_state.df.iterrows():
-                                linha_yyyymm = row["referencia"]
-                                meses_diff = calcular_meses_diff(marco_yyyymm, linha_yyyymm)
-                                bloco_atual = meses_diff // 12
-                                if bloco_atual > bloco_anterior:
-                                    inicio = add_meses_yyyymm(marco_yyyymm, bloco_anterior * 12)
-                                    fim = add_meses_yyyymm(marco_yyyymm, bloco_atual * 12)
-                                    data_inicio = yyyymm_para_data_bacen(inicio)
-                                    data_fim = yyyymm_para_data_bacen(fim)
-                                    if data_inicio and data_fim:
-                                        if indice_fornecedor == "IPCA": fator = consultar_bacen_fator(433, data_inicio, data_fim)
-                                        elif indice_fornecedor == "IGPM": fator = consultar_bacen_fator(189, data_inicio, data_fim)
-                                        elif indice_fornecedor == "IGP-DI": fator = consultar_bacen_fator(190, data_inicio, data_fim)
-                                        elif indice_fornecedor == "ICGJ": fator = 1 + (row.get("ICGJ", 0)/100)
-                                        else: fator = 1.0
+            if st.button("🚀 Atualizar Fornecedor", type="primary", use_container_width=True):
+                if valor_fornecedor <= 0:
+                    st.warning("❌ Valor do Fornecedor deve ser maior que zero.")
+                else:
+                    marco_yyyymm = converter_referencia_yyyymm(marco_fornecedor)
+                    preco_atual = valor_fornecedor
+                    bloco_anterior = 0
+                    with st.spinner("Atualizando preço FORNECEDOR..."):
+                        for i, row in st.session_state.df.iterrows():
+                            ref_pgto = row.get("referencia_pgto")
+                            linha_yyyymm = row["referencia"] if pd.isna(ref_pgto) or ref_pgto == "" or ref_pgto == 0 else ref_pgto
 
-                                        if fator is None or fator == 0 or (fator < 1 and not considerar_negativo):
+                            meses_diff = calcular_meses_diff(marco_yyyymm, linha_yyyymm)
+                            bloco_atual = meses_diff // 12
+                            if bloco_atual > bloco_anterior:
+                                inicio = add_meses_yyyymm(marco_yyyymm, bloco_anterior * 12)
+                                fim = add_meses_yyyymm(marco_yyyymm, bloco_atual * 12)
+                                data_inicio = yyyymm_para_data_bacen(inicio)
+                                data_fim = yyyymm_para_data_bacen(fim)
+                                if data_inicio and data_fim:
+                                    if indice_fornecedor == "IPCA":
+                                        fator = consultar_bacen_fator(433, data_inicio, data_fim, considerar_negativo=considerar_negativo)
+                                    elif indice_fornecedor == "IGPM":
+                                        fator = consultar_bacen_fator(189, data_inicio, data_fim, considerar_negativo=considerar_negativo)
+                                    elif indice_fornecedor == "IGP-DI":
+                                        fator = consultar_bacen_fator(190, data_inicio, data_fim, considerar_negativo=considerar_negativo)
+                                    elif indice_fornecedor == "ICGJ":
+                                        fator = 1 + (row.get("ICGJ", 0)/100)
+                                        if considerar_negativo and fator < 1:
                                             fator = 1.0
-                                        preco_atual *= fator
-                                        bloco_anterior = bloco_atual
+                                    else:
+                                        fator = 1.0
 
-                                st.session_state.df.at[i, "Preço que estava sendo cobrado pela CEMIG"] = round(preco_atual, 2)
-                                st.session_state.df.at[i, "Valor CEMIG"] = round(st.session_state.df.at[i, "Número de Postes"] * preco_atual, 2)
-                                st.session_state.df.at[i, "Benefício Econômico"] = round(st.session_state.df.at[i, "Valor CEMIG"] - st.session_state.df.at[i, "Valor conquistado na AÇÃO"], 2)
-                        st.session_state.df = st.session_state.df.sort_values("referencia").reset_index(drop=True)
-                        st.success("✅ Preço FORNECEDOR atualizado com sucesso!")
+                                    preco_atual *= fator
+                                    bloco_anterior = bloco_atual
 
-            with st.expander("ℹ️ Instruções", expanded=False):
-                st.caption("1. Selecione a data que servirá como marco inicial; 2. Insira o valor do fornecedor; 3. Escolha o índice de reajuste; 4. Se necessário, ative a opção de índices negativos.")
+                            st.session_state.df.at[i, "Preço que estava sendo cobrado pela CEMIG"] = round(preco_atual, 2)
+                            st.session_state.df.at[i, "Valor CEMIG"] = round(st.session_state.df.at[i, "Número de Postes"] * preco_atual, 2)
+                            st.session_state.df.at[i, "Benefício Econômico"] = round(st.session_state.df.at[i, "Valor CEMIG"] - st.session_state.df.at[i, "Valor conquistado na AÇÃO"], 2)
+                    st.session_state.df = st.session_state.df.sort_values("referencia").reset_index(drop=True)
+                    st.session_state.df = corrigir_tipos(st.session_state.df)
+                    st.success("✅ Preço FORNECEDOR atualizado com sucesso!")
 
-        # ==== TAB 3: VALOR CONQUISTADO ====
         with tab3:
             st.markdown("##### Configurar preço conquistado na ação")
-            
-            # Linha 1: Marco Conquistado | Valor | Índice
             col_m2, col_v2, col_i2 = st.columns([1.2, 1, 1.3])
             with col_m2:
                 marco_conquistado = st.selectbox("📅 Marco Conquistado:", st.session_state.references, key="marco_conq")
@@ -390,90 +485,136 @@ elif current_step.startswith("3️⃣"):
             with col_i2:
                 indice_contrato = st.selectbox("📊 Índice:", ["IPCA", "IGPM", "IGP-DI", "ICGJ", "Outros"], key="ind_conq")
             
-            # Linha 2: Botão de atualização (alinhado à esquerda)
-            col_button_left, col_spacer_right = st.columns([1.2, 2.8])
-            with col_button_left:
-                if st.button("🚀 Atualizar Conquistado", type="primary", use_container_width=True):
-                    if valor_conquistado <= 0:
-                        st.warning("❌ Valor conquistado deve ser maior que zero.")
-                    else:
-                        marco_yyyymm = converter_referencia_yyyymm(marco_conquistado)
-                        preco_atual = valor_conquistado
-                        bloco_anterior = 0
-                        with st.spinner("Atualizando preço CONQUISTADO em blocos de 12 meses..."):
-                            for i, row in st.session_state.df.iterrows():
-                                linha_yyyymm = row["referencia"]
-                                meses_diff = calcular_meses_diff(marco_yyyymm, linha_yyyymm)
-                                bloco_atual = meses_diff // 12
-                                if bloco_atual > bloco_anterior:
-                                    inicio = add_meses_yyyymm(marco_yyyymm, bloco_anterior * 12)
-                                    fim = add_meses_yyyymm(marco_yyyymm, bloco_atual * 12)
-                                    data_inicio = yyyymm_para_data_bacen(inicio)
-                                    data_fim = yyyymm_para_data_bacen(fim)
-                                    if data_inicio and data_fim:
-                                        if indice_contrato == "IPCA": fator = consultar_bacen_fator(433, data_inicio, data_fim)
-                                        elif indice_contrato == "IGPM": fator = consultar_bacen_fator(189, data_inicio, data_fim)
-                                        elif indice_contrato == "IGP-DI": fator = consultar_bacen_fator(190, data_inicio, data_fim)
-                                        elif indice_contrato == "ICGJ": fator = 1 + (row.get("ICGJ", 0)/100)
-                                        else: fator = 1.0
+            if st.button("🚀 Atualizar Conquistado", type="primary", use_container_width=True):
+                if valor_conquistado <= 0:
+                    st.warning("❌ Valor conquistado deve ser maior que zero.")
+                else:
+                    marco_yyyymm = converter_referencia_yyyymm(marco_conquistado)
+                    preco_atual = valor_conquistado
+                    bloco_anterior = 0
+                    with st.spinner("Atualizando preço CONQUISTADO..."):
+                        for i, row in st.session_state.df.iterrows():
+                            ref_pgto = row.get("referencia_pgto")
+                            linha_yyyymm = row["referencia"] if pd.isna(ref_pgto) or ref_pgto == "" or ref_pgto == 0 else ref_pgto
 
-                                        if fator is None or fator == 0 or (fator < 1 and not considerar_negativo):
+                            meses_diff = calcular_meses_diff(marco_yyyymm, linha_yyyymm)
+                            bloco_atual = meses_diff // 12
+                            if bloco_atual > bloco_anterior:
+                                inicio = add_meses_yyyymm(marco_yyyymm, bloco_anterior * 12)
+                                fim = add_meses_yyyymm(marco_yyyymm, bloco_atual * 12)
+                                data_inicio = yyyymm_para_data_bacen(inicio)
+                                data_fim = yyyymm_para_data_bacen(fim)
+                                if data_inicio and data_fim:
+                                    if indice_contrato == "IPCA":
+                                        fator = consultar_bacen_fator(433, data_inicio, data_fim, considerar_negativo=considerar_negativo)
+                                    elif indice_contrato == "IGPM":
+                                        fator = consultar_bacen_fator(189, data_inicio, data_fim, considerar_negativo=considerar_negativo)
+                                    elif indice_contrato == "IGP-DI":
+                                        fator = consultar_bacen_fator(190, data_inicio, data_fim, considerar_negativo=considerar_negativo)
+                                    elif indice_contrato == "ICGJ":
+                                        fator = 1 + (row.get("ICGJ", 0)/100)
+                                        if considerar_negativo and fator < 1:
                                             fator = 1.0
-                                        preco_atual *= fator
-                                        bloco_anterior = bloco_atual
+                                    else:
+                                        fator = 1.0
 
-                                st.session_state.df.at[i, "Preço conquistado na AÇÃO"] = round(preco_atual, 2)
-                                st.session_state.df.at[i, "Valor conquistado na AÇÃO"] = round(st.session_state.df.at[i, "Número de Postes"] * preco_atual, 2)
-                                st.session_state.df.at[i, "Benefício Econômico"] = round(st.session_state.df.at[i, "Valor CEMIG"] - st.session_state.df.at[i, "Valor conquistado na AÇÃO"], 2)
-                        st.session_state.df = st.session_state.df.sort_values("referencia").reset_index(drop=True)
-                        st.success("✅ Preço CONQUISTADO atualizado com sucesso!")
+                                    preco_atual *= fator
+                                    bloco_anterior = bloco_atual
 
-            with st.expander("ℹ️ Instruções", expanded=False):
-                st.caption("1. Selecione a data que servirá como marco inicial; 2. Insira o valor conquistado; 3. Escolha o índice previsto no contrato; 4. Se necessário, ative a opção de índices negativos.")
+                            st.session_state.df.at[i, "Preço conquistado na AÇÃO"] = round(preco_atual, 2)
+                            st.session_state.df.at[i, "Valor conquistado na AÇÃO"] = round(st.session_state.df.at[i, "Número de Postes"] * preco_atual, 2)
+                            st.session_state.df.at[i, "Benefício Econômico"] = round(st.session_state.df.at[i, "Valor CEMIG"] - st.session_state.df.at[i, "Valor conquistado na AÇÃO"], 2)
+                    st.session_state.df = st.session_state.df.sort_values("referencia").reset_index(drop=True)
+                    st.session_state.df = corrigir_tipos(st.session_state.df)
+                    st.success("✅ Preço CONQUISTADO atualizado com sucesso!")
 
-# ====================== PASSO 4 ======================
-elif current_step.startswith("4️⃣"):
-    st.subheader("4️⃣ Passo 4 - Consultar BACEN & Exportar")
-    col_a, col_b = st.columns(2)
-    with col_a:
-        if st.button("Consultar BACEN (IPCA / IGPM / IGP-DI)", type="secondary", use_container_width=True):
+# ====================== PASSO 5 ======================
+elif current_step.startswith("5️⃣"):
+    st.subheader("5️⃣ Passo 5 - Consultar BACEN & Exportar")
+    st.checkbox("✓ Considerar Índices Negativos?", value=st.session_state.get("considerar_neg_global", False), key="considerar_neg_global")
+    
+    col_num, col_cons, col_exp = st.columns([1, 1, 1])
+    with col_num:
+        st.write("**Honorários (%):**")
+        percentual_honorarios = st.number_input("", min_value=0.0, max_value=100.0, value=0.0, step=0.01, key="percentual_honorarios", label_visibility="collapsed")
+    with col_cons:
+        st.write("**Consultar dados no BACEN:**")
+        if st.button("🔍 BACEN", type="secondary", use_container_width=True):
             if st.session_state.df is not None:
-                with st.spinner("Consultando BACEN..."):
-                    for i, row in st.session_state.df.iterrows():
-                        ref_pgto = row["Pagamento"]
-                        ipca = obter_ipca(ref_pgto)
-                        igpm = obter_igpm(ref_pgto)
-                        igpdi = obter_igpdi(ref_pgto)
+                    with st.spinner("Consultando BACEN..."):
+                        considerar_neg = st.session_state.get("considerar_neg_global", False)
+                        percentual_honorarios = st.session_state.get("percentual_honorarios", 0.0)
 
-                        st.session_state.df.at[i, "IPCA"] = ipca
-                        st.session_state.df.at[i, "IGPM"] = igpm
-                        st.session_state.df.at[i, "IGPDI"] = igpdi
+                        for i, row in st.session_state.df.iterrows():
+                            ref_pgto = row.get("referencia_pgto")
+                            if pd.isna(ref_pgto) or ref_pgto == "" or ref_pgto == 0:
+                                data_para_consulta = yyyymm_para_data_bacen(row["referencia"])
+                            else:
+                                data_para_consulta = row.get("Pagamento")
 
-                        benef = st.session_state.df.at[i, "Benefício Econômico"]
-                        if ipca is not None:
-                            st.session_state.df.at[i, "Corrigido IPCA"] = round(benef * ipca, 2)
-                        if igpm is not None:
-                            st.session_state.df.at[i, "Corrigido IGPM"] = round(benef * igpm, 2)
-                        if igpdi is not None:
-                            st.session_state.df.at[i, "Corrigido IGPDI"] = round(benef * igpdi, 2)
+                            ipca  = obter_ipca (data_para_consulta, considerar_negativo=considerar_neg)
+                            igpm  = obter_igpm (data_para_consulta, considerar_negativo=considerar_neg)
+                            igpdi = obter_igpdi(data_para_consulta, considerar_negativo=considerar_neg)
 
-                        icgj = st.session_state.df.at[i, "ICGJ"]
-                        if pd.notna(icgj) and icgj != 0:
-                            st.session_state.df.at[i, "Corrigido ICGJ"] = round(benef * icgj, 2)
+                            # Forçamento explícito e definitivo quando checkbox marcado
+                            ipca_final  = 1.0 if (considerar_neg and ipca is not None and ipca < 1) else ipca
+                            igpm_final  = 1.0 if (considerar_neg and igpm is not None and igpm < 1) else igpm
+                            igpdi_final = 1.0 if (considerar_neg and igpdi is not None and igpdi < 1) else igpdi
 
-                    # TOTAL
-                    total = {col: "" for col in st.session_state.df.columns}
-                    total["Mês referência/Ano cobrança"] = "TOTAL"
-                    for col in ["Valor conquistado na AÇÃO", "Valor CEMIG", "Benefício Econômico",
-                                "Corrigido IPCA", "Corrigido IGPM", "Corrigido IGPDI", "Corrigido ICGJ"]:
-                        if col in st.session_state.df.columns:
-                            total[col] = round(st.session_state.df[col].sum(), 2)
-                    st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([total])], ignore_index=True)
-                    st.session_state.df = st.session_state.df.sort_values("referencia", na_position="last").reset_index(drop=True)
-                st.success("✅ Consulta BACEN concluída!")
+                            st.session_state.df.at[i, "IPCA"]  = ipca_final
+                            st.session_state.df.at[i, "IGPM"]  = igpm_final
+                            st.session_state.df.at[i, "IGPDI"] = igpdi_final
 
-    with col_b:
-        if st.button("Exportar para Excel", type="primary", use_container_width=True):
+                            benef = st.session_state.df.at[i, "Benefício Econômico"]
+
+                            if ipca_final is not None:
+                                st.session_state.df.at[i, "Corrigido IPCA"] = round(benef * ipca_final, 2)
+                            if igpm_final is not None:
+                                st.session_state.df.at[i, "Corrigido IGPM"] = round(benef * igpm_final, 2)
+                            if igpdi_final is not None:
+                                st.session_state.df.at[i, "Corrigido IGPDI"] = round(benef * igpdi_final, 2)
+
+                            icgj = st.session_state.df.at[i, "ICGJ"]
+                            if pd.notna(icgj) and icgj != 0:
+                                icgj_final = 1.0 if (considerar_neg and icgj < 1) else icgj
+                                st.session_state.df.at[i, "ICGJ"] = icgj_final
+                                st.session_state.df.at[i, "Corrigido ICGJ"] = round(benef * icgj_final, 2)
+
+                            # Calcular Honorários
+                            percentual = percentual_honorarios / 100
+                            st.session_state.df.at[i, "Honorários IPCA"] = round(st.session_state.df.at[i, "Corrigido IPCA"] * percentual, 2) if pd.notna(st.session_state.df.at[i, "Corrigido IPCA"]) else 0.0
+                            st.session_state.df.at[i, "Honorários IGPM"] = round(st.session_state.df.at[i, "Corrigido IGPM"] * percentual, 2) if pd.notna(st.session_state.df.at[i, "Corrigido IGPM"]) else 0.0
+                            st.session_state.df.at[i, "Honorários IGPDI"] = round(st.session_state.df.at[i, "Corrigido IGPDI"] * percentual, 2) if pd.notna(st.session_state.df.at[i, "Corrigido IGPDI"]) else 0.0
+                            st.session_state.df.at[i, "Honorários ICGJ"] = round(st.session_state.df.at[i, "Corrigido ICGJ"] * percentual, 2) if pd.notna(st.session_state.df.at[i, "Corrigido ICGJ"]) else 0.0
+
+                        # Forçamento de segurança FINAL (após todo o loop)
+                        considerar_neg = st.session_state.get("considerar_neg_global", False)
+                        for col in ["IPCA", "IGPM", "IGPDI", "ICGJ"]:
+                            if col in st.session_state.df.columns:
+                                st.session_state.df[col] = st.session_state.df[col].apply(
+                                    lambda v: 1.0 if (considerar_neg and pd.notna(v) and v < 1) else v
+                                )
+
+                        st.session_state.df = corrigir_tipos(st.session_state.df)
+
+                        # TOTAL NO FINAL
+                        total_row = {col: "" for col in st.session_state.df.columns}
+                        total_row["Mês referência/Ano cobrança"] = "TOTAL"
+                        for col in ["Valor conquistado na AÇÃO", "Valor CEMIG", "Benefício Econômico",
+                                    "Corrigido IPCA", "Corrigido IGPM", "Corrigido IGPDI", "Corrigido ICGJ",
+                                    "Honorários IPCA", "Honorários IGPM", "Honorários IGPDI", "Honorários ICGJ"]:
+                            if col in st.session_state.df.columns:
+                                total_row[col] = round(st.session_state.df[col].sum(), 2)
+
+                        df_sem_total = st.session_state.df[st.session_state.df["Mês referência/Ano cobrança"] != "TOTAL"].copy()
+                        st.session_state.df = pd.concat([df_sem_total, pd.DataFrame([total_row])], ignore_index=True)
+                        st.session_state.df = corrigir_tipos(st.session_state.df)
+
+                    st.success("✅ Consulta BACEN concluída!")
+
+    with col_exp:
+        st.write("**Exportar tabela final para excel:**")
+        if st.button("📥 Excel", type="primary", use_container_width=True):
             if st.session_state.df is not None:
                 output = BytesIO()
                 with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -485,14 +626,60 @@ elif current_step.startswith("4️⃣"):
 # ====================== TABELA FINAL ======================
 st.divider()
 st.subheader("📋 Tabela Atual (atualizada em tempo real)")
-if st.session_state.df is not None and not st.session_state.df.empty:
-    st.dataframe(st.session_state.df, use_container_width=True, height=720, hide_index=True)
-elif st.session_state.raw_df is not None:
-    st.dataframe(st.session_state.raw_df, use_container_width=True, height=720, hide_index=True)
+
+if st.session_state.get("df") is not None and not st.session_state.df.empty:
+    
+    df = st.session_state.df
+    
+    # Colunas-alvo
+    colunas_indices = ["IPCA", "IGPM", "IGPDI", "ICGJ"]
+    cols_exist = [c for c in colunas_indices if c in df.columns]
+    
+    styler = df.style
+    
+    if cols_exist:
+        def pintar_vermelho(v):
+            try:
+                if float(v) < 1:
+                    return "background-color: #ffdddd;"
+                return ""
+            except:
+                return ""
+        
+        styler = styler.map(
+            pintar_vermelho,
+            subset=cols_exist
+        )
+        
+        # Formatação numérica (opcional, mas ajuda muito)
+        styler = styler.format(
+            precision=4,
+            subset=cols_exist,
+            na_rep="-"
+        )
+    
+    # Opcional: destacar linha TOTAL se existir
+    def destacar_total(row):
+        if row.get("Mês referência/Ano cobrança") == "TOTAL":
+            return ["font-weight: bold; background-color: #f8f9fa;"] * len(row)
+        return [""] * len(row)
+    
+    styler = styler.apply(destacar_total, axis=1)
+    
+    st.dataframe(
+        styler,
+        use_container_width=True,
+        height=720,
+        hide_index=True
+    )
+
+elif st.session_state.get("raw_df") is not None and not st.session_state.raw_df.empty:
+    st.dataframe(
+        st.session_state.raw_df,
+        use_container_width=True,
+        height=720,
+        hide_index=True
+    )
+
 else:
     st.info("Extraia o PDF no Passo 1 para começar.")
-
-
-
-
-
