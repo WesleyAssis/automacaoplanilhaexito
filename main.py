@@ -23,7 +23,8 @@ COLUMN_VARIANTS = {
     "Mês referência/Ano cobrança": ["Referência", "Dta.Ref"],
     "Pagamento": ["Pagamento", "Data.Pagto"],
     "Pontos": ["Pontos", "Ptos./Qtd."],
-    "Preço Pto.": ["Preço Pto.", "Prç.Pto./Vlr."]
+    "Preço Pto.": ["Preço Pto.", "Prç.Pto./Vlr."],
+    "Vencimento": ["Vencimento", "Data Vencimento"]
 }
 
 # =====================================================
@@ -221,7 +222,7 @@ def corrigir_tipos(df):
 # STREAMLIT APP
 # =====================================================
 st.set_page_config(page_title="Correção Monetária - ERP", layout="wide")
-st.title("🏢 Automação para Correção Monetária (versão - 1.0)")
+st.title("🏢 Automação para Correção Monetária")
 
 # Session State
 if "raw_df" not in st.session_state: st.session_state.raw_df = None
@@ -299,6 +300,8 @@ elif current_step.startswith("2️⃣"):
                     df["referencia"] = df["Mês referência/Ano cobrança"].apply(converter_referencia_yyyymm)
                     df["referencia_pgto"] = df.get("Pagamento", pd.Series()).apply(converter_referencia_yyyymm_pagamento)
 
+                    df["referencia_vcto"] = df.get("Vencimento", pd.Series()).apply(converter_referencia_yyyymm_pagamento)
+
                     df = df[df["Mês referência/Ano cobrança"].apply(eh_mes_ano) & (df["referencia"] != "")].reset_index(drop=True)
 
                     df = recalcular_icgj(df)
@@ -307,9 +310,9 @@ elif current_step.startswith("2️⃣"):
                     for c in ["Corrigido IPCA","Corrigido IGPM","Corrigido IGPDI","Corrigido ICGJ"]: df[c] = 0.0
                     for c in ["Honorários IPCA","Honorários IGPM","Honorários IGPDI","Honorários ICGJ"]: df[c] = 0.0
 
-                    col_order = ["Mês referência/Ano cobrança","referencia","Pagamento","referencia_pgto","Número de Postes",
-                                 "Preço que estava sendo cobrado pela CEMIG","Preço conquistado na AÇÃO",
-                                 "Valor conquistado na AÇÃO","Valor CEMIG","Benefício Econômico",
+                    col_order = ["Mês referência/Ano cobrança","referencia","Pagamento","referencia_pgto","Vencimento","referencia_vcto","Número de Postes",
+                                 "Preço que estava sendo cobrado pela CEMIG","Valor CEMIG","Preço conquistado na AÇÃO",
+                                 "Valor conquistado na AÇÃO","Benefício Econômico",
                                  "IPCA","IGPM","IGPDI","ICGJ","Corrigido IPCA","Corrigido IGPM","Corrigido IGPDI","Corrigido ICGJ",
                                  "Honorários IPCA","Honorários IGPM","Honorários IGPDI","Honorários ICGJ"]
                     df = df[[c for c in col_order if c in df.columns]]
@@ -334,10 +337,15 @@ elif current_step.startswith("3️⃣"):
     else:
         st.markdown("##### Adicionar parcelas futuras automaticamente")
 
+        st.write("**Data do Trânsito em Julgado:**")
+        col_date, _ = st.columns([1.2, 2.8])
+        with col_date:
+            data_transito = st.date_input("", label_visibility="collapsed")
+
         st.write("**Quantidade de novas parcelas a projetar:**")
         col_qty, col_add, col_del = st.columns([1, 1, 1])
         with col_qty:
-            quantidade = st.number_input("", min_value=1, value=6, step=1, label_visibility="collapsed")
+            quantidade = st.number_input("", min_value=1, value=12, step=1, label_visibility="collapsed")
         with col_add:
             if st.button("➕ Adicionar", type="primary", use_container_width=True):
                 try:
@@ -356,6 +364,8 @@ elif current_step.startswith("3️⃣"):
                         nova_linha["referencia"] = referencia_atual
                         nova_linha["Pagamento"] = ""
                         nova_linha["referencia_pgto"] = ""
+                        nova_linha["Vencimento"] = ""
+                        nova_linha["referencia_vcto"] = ""
 
                         for col in ["IPCA", "IGPM", "IGPDI", "Corrigido IPCA", "Corrigido IGPM", "Corrigido IGPDI", "Corrigido ICGJ",
                                     "Honorários IPCA", "Honorários IGPM", "Honorários IGPDI", "Honorários ICGJ"]:
@@ -441,8 +451,7 @@ elif current_step.startswith("4️⃣"):
                     bloco_anterior = 0
                     with st.spinner("Atualizando preço FORNECEDOR..."):
                         for i, row in st.session_state.df.iterrows():
-                            ref_pgto = row.get("referencia_pgto")
-                            linha_yyyymm = row["referencia"] if pd.isna(ref_pgto) or ref_pgto == "" or ref_pgto == 0 else ref_pgto
+                            linha_yyyymm = row["referencia"]
 
                             meses_diff = calcular_meses_diff(marco_yyyymm, linha_yyyymm)
                             bloco_atual = meses_diff // 12
@@ -469,7 +478,8 @@ elif current_step.startswith("4️⃣"):
                                     bloco_anterior = bloco_atual
 
                             st.session_state.df.at[i, "Preço que estava sendo cobrado pela CEMIG"] = round(preco_atual, 2)
-                            st.session_state.df.at[i, "Valor CEMIG"] = round(st.session_state.df.at[i, "Número de Postes"] * preco_atual, 2)
+                            rounded_preco_forn = round(preco_atual, 2)
+                            st.session_state.df.at[i, "Valor CEMIG"] = round(st.session_state.df.at[i, "Número de Postes"] * rounded_preco_forn, 2)
                             st.session_state.df.at[i, "Benefício Econômico"] = round(st.session_state.df.at[i, "Valor CEMIG"] - st.session_state.df.at[i, "Valor conquistado na AÇÃO"], 2)
                     st.session_state.df = st.session_state.df.sort_values("referencia").reset_index(drop=True)
                     st.session_state.df = corrigir_tipos(st.session_state.df)
@@ -494,8 +504,7 @@ elif current_step.startswith("4️⃣"):
                     bloco_anterior = 0
                     with st.spinner("Atualizando preço CONQUISTADO..."):
                         for i, row in st.session_state.df.iterrows():
-                            ref_pgto = row.get("referencia_pgto")
-                            linha_yyyymm = row["referencia"] if pd.isna(ref_pgto) or ref_pgto == "" or ref_pgto == 0 else ref_pgto
+                            linha_yyyymm = row["referencia"]
 
                             meses_diff = calcular_meses_diff(marco_yyyymm, linha_yyyymm)
                             bloco_atual = meses_diff // 12
@@ -522,7 +531,8 @@ elif current_step.startswith("4️⃣"):
                                     bloco_anterior = bloco_atual
 
                             st.session_state.df.at[i, "Preço conquistado na AÇÃO"] = round(preco_atual, 2)
-                            st.session_state.df.at[i, "Valor conquistado na AÇÃO"] = round(st.session_state.df.at[i, "Número de Postes"] * preco_atual, 2)
+                            rounded_preco_conq = round(preco_atual, 2)
+                            st.session_state.df.at[i, "Valor conquistado na AÇÃO"] = round(st.session_state.df.at[i, "Número de Postes"] * rounded_preco_conq, 2)
                             st.session_state.df.at[i, "Benefício Econômico"] = round(st.session_state.df.at[i, "Valor CEMIG"] - st.session_state.df.at[i, "Valor conquistado na AÇÃO"], 2)
                     st.session_state.df = st.session_state.df.sort_values("referencia").reset_index(drop=True)
                     st.session_state.df = corrigir_tipos(st.session_state.df)
@@ -683,3 +693,5 @@ elif st.session_state.get("raw_df") is not None and not st.session_state.raw_df.
 
 else:
     st.info("Extraia o PDF no Passo 1 para começar.")
+
+st.caption("Versão: v.1.1")
