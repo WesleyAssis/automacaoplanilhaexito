@@ -24,7 +24,7 @@ COLUMN_VARIANTS = {
     "Pagamento": ["Pagamento", "Data.Pagto"],
     "Pontos": ["Pontos", "Ptos./Qtd."],
     "Preço Pto.": ["Preço Pto.", "Prç.Pto./Vlr."],
-    "Vencimento": ["Vencimento", "Data Vencimento"]
+    "Vencimento": ["Vencimento", "Data Vencimento", "Data.Venc."]
 }
 
 # =====================================================
