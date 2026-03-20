@@ -557,74 +557,96 @@ elif current_step.startswith("5️⃣"):
         st.write("**Consultar dados no BACEN:**")
         if st.button("🔍 BACEN", type="secondary", width="stretch"):
             if st.session_state.df is not None:
-                    with st.spinner("Consultando BACEN..."):
-                        considerar_neg = st.session_state.get("considerar_neg_global", False)
-                        percentual_honorarios = st.session_state.get("percentual_honorarios", 0.0)
+                    # Criar placeholder para mostrar o progresso
+                    status_placeholder = st.empty()
+                    progress_placeholder = st.empty()
+                    
+                    considerar_neg = st.session_state.get("considerar_neg_global", False)
+                    percentual_honorarios = st.session_state.get("percentual_honorarios", 0.0)
+                    total_linhas = len(st.session_state.df)
 
-                        for i, row in st.session_state.df.iterrows():
-                            ref_pgto = row.get("referencia_pgto")
-                            if pd.isna(ref_pgto) or ref_pgto == "" or ref_pgto == 0:
-                                data_para_consulta = yyyymm_para_data_bacen(row["referencia"])
-                            else:
-                                data_para_consulta = row.get("Pagamento")
+                    for i, row in st.session_state.df.iterrows():
+                        # Mostrar qual linha está sendo processada
+                        ref = row.get("Mês referência/Ano cobrança", "N/A")
+                        progresso = (i + 1) / total_linhas
+                        
+                        # Atualizar o placeholder com o status atual
+                        status_placeholder.info(f"📊 Processando: {ref} ({i+1}/{total_linhas})")
+                        progress_placeholder.progress(progresso, text=f"Consultando índices... {int(progresso*100)}%")
+                        
+                        ref_pgto = row.get("referencia_pgto")
+                        if pd.isna(ref_pgto) or ref_pgto == "" or ref_pgto == 0:
+                            data_para_consulta = yyyymm_para_data_bacen(row["referencia"])
+                        else:
+                            data_para_consulta = row.get("Pagamento")
 
-                            ipca  = obter_ipca (data_para_consulta, considerar_negativo=considerar_neg)
-                            igpm  = obter_igpm (data_para_consulta, considerar_negativo=considerar_neg)
-                            igpdi = obter_igpdi(data_para_consulta, considerar_negativo=considerar_neg)
+                        # Consultar cada índice e mostrar o que está sendo consultado
+                        status_placeholder.info(f"📊 {ref} - Consultando **IPCA**...")
+                        ipca  = obter_ipca (data_para_consulta, considerar_negativo=considerar_neg)
+                        
+                        status_placeholder.info(f"📊 {ref} - Consultando **IGPM**...")
+                        igpm  = obter_igpm (data_para_consulta, considerar_negativo=considerar_neg)
+                        
+                        status_placeholder.info(f"📊 {ref} - Consultando **IGP-DI**...")
+                        igpdi = obter_igpdi(data_para_consulta, considerar_negativo=considerar_neg)
 
-                            # Forçamento explícito e definitivo quando checkbox marcado
-                            ipca_final  = 1.0 if (considerar_neg and ipca is not None and ipca < 1) else ipca
-                            igpm_final  = 1.0 if (considerar_neg and igpm is not None and igpm < 1) else igpm
-                            igpdi_final = 1.0 if (considerar_neg and igpdi is not None and igpdi < 1) else igpdi
+                        # Forçamento explícito e definitivo quando checkbox marcado
+                        ipca_final  = 1.0 if (considerar_neg and ipca is not None and ipca < 1) else ipca
+                        igpm_final  = 1.0 if (considerar_neg and igpm is not None and igpm < 1) else igpm
+                        igpdi_final = 1.0 if (considerar_neg and igpdi is not None and igpdi < 1) else igpdi
 
-                            st.session_state.df.at[i, "IPCA"]  = ipca_final
-                            st.session_state.df.at[i, "IGPM"]  = igpm_final
-                            st.session_state.df.at[i, "IGPDI"] = igpdi_final
+                        st.session_state.df.at[i, "IPCA"]  = ipca_final
+                        st.session_state.df.at[i, "IGPM"]  = igpm_final
+                        st.session_state.df.at[i, "IGPDI"] = igpdi_final
 
-                            benef = st.session_state.df.at[i, "Benefício Econômico"]
+                        benef = st.session_state.df.at[i, "Benefício Econômico"]
 
-                            if ipca_final is not None:
-                                st.session_state.df.at[i, "Corrigido IPCA"] = round(benef * ipca_final, 2)
-                            if igpm_final is not None:
-                                st.session_state.df.at[i, "Corrigido IGPM"] = round(benef * igpm_final, 2)
-                            if igpdi_final is not None:
-                                st.session_state.df.at[i, "Corrigido IGPDI"] = round(benef * igpdi_final, 2)
+                        if ipca_final is not None:
+                            st.session_state.df.at[i, "Corrigido IPCA"] = round(benef * ipca_final, 2)
+                        if igpm_final is not None:
+                            st.session_state.df.at[i, "Corrigido IGPM"] = round(benef * igpm_final, 2)
+                        if igpdi_final is not None:
+                            st.session_state.df.at[i, "Corrigido IGPDI"] = round(benef * igpdi_final, 2)
 
-                            icgj = st.session_state.df.at[i, "ICGJ"]
-                            if pd.notna(icgj) and icgj != 0:
-                                icgj_final = 1.0 if (considerar_neg and icgj < 1) else icgj
-                                st.session_state.df.at[i, "ICGJ"] = icgj_final
-                                st.session_state.df.at[i, "Corrigido ICGJ"] = round(benef * icgj_final, 2)
+                        icgj = st.session_state.df.at[i, "ICGJ"]
+                        if pd.notna(icgj) and icgj != 0:
+                            icgj_final = 1.0 if (considerar_neg and icgj < 1) else icgj
+                            st.session_state.df.at[i, "ICGJ"] = icgj_final
+                            st.session_state.df.at[i, "Corrigido ICGJ"] = round(benef * icgj_final, 2)
 
-                            # Calcular Honorários
-                            percentual = percentual_honorarios / 100
-                            st.session_state.df.at[i, "Honorários IPCA"] = round(st.session_state.df.at[i, "Corrigido IPCA"] * percentual, 2) if pd.notna(st.session_state.df.at[i, "Corrigido IPCA"]) else 0.0
-                            st.session_state.df.at[i, "Honorários IGPM"] = round(st.session_state.df.at[i, "Corrigido IGPM"] * percentual, 2) if pd.notna(st.session_state.df.at[i, "Corrigido IGPM"]) else 0.0
-                            st.session_state.df.at[i, "Honorários IGPDI"] = round(st.session_state.df.at[i, "Corrigido IGPDI"] * percentual, 2) if pd.notna(st.session_state.df.at[i, "Corrigido IGPDI"]) else 0.0
-                            st.session_state.df.at[i, "Honorários ICGJ"] = round(st.session_state.df.at[i, "Corrigido ICGJ"] * percentual, 2) if pd.notna(st.session_state.df.at[i, "Corrigido ICGJ"]) else 0.0
+                        # Calcular Honorários
+                        percentual = percentual_honorarios / 100
+                        st.session_state.df.at[i, "Honorários IPCA"] = round(st.session_state.df.at[i, "Corrigido IPCA"] * percentual, 2) if pd.notna(st.session_state.df.at[i, "Corrigido IPCA"]) else 0.0
+                        st.session_state.df.at[i, "Honorários IGPM"] = round(st.session_state.df.at[i, "Corrigido IGPM"] * percentual, 2) if pd.notna(st.session_state.df.at[i, "Corrigido IGPM"]) else 0.0
+                        st.session_state.df.at[i, "Honorários IGPDI"] = round(st.session_state.df.at[i, "Corrigido IGPDI"] * percentual, 2) if pd.notna(st.session_state.df.at[i, "Corrigido IGPDI"]) else 0.0
+                        st.session_state.df.at[i, "Honorários ICGJ"] = round(st.session_state.df.at[i, "Corrigido ICGJ"] * percentual, 2) if pd.notna(st.session_state.df.at[i, "Corrigido ICGJ"]) else 0.0
+                    
+                    # Limpar os placeholders após conclusão
+                    status_placeholder.empty()
+                    progress_placeholder.empty()
 
-                        # Forçamento de segurança FINAL (após todo o loop)
-                        considerar_neg = st.session_state.get("considerar_neg_global", False)
-                        for col in ["IPCA", "IGPM", "IGPDI", "ICGJ"]:
-                            if col in st.session_state.df.columns:
-                                st.session_state.df[col] = st.session_state.df[col].apply(
-                                    lambda v: 1.0 if (considerar_neg and pd.notna(v) and v < 1) else v
-                                )
+                    # Forçamento de segurança FINAL (após todo o loop)
+                    considerar_neg = st.session_state.get("considerar_neg_global", False)
+                    for col in ["IPCA", "IGPM", "IGPDI", "ICGJ"]:
+                        if col in st.session_state.df.columns:
+                            st.session_state.df[col] = st.session_state.df[col].apply(
+                                lambda v: 1.0 if (considerar_neg and pd.notna(v) and v < 1) else v
+                            )
 
-                        st.session_state.df = corrigir_tipos(st.session_state.df)
+                    st.session_state.df = corrigir_tipos(st.session_state.df)
 
-                        # TOTAL NO FINAL
-                        total_row = {col: "" for col in st.session_state.df.columns}
-                        total_row["Mês referência/Ano cobrança"] = "TOTAL"
-                        for col in ["Valor conquistado na AÇÃO", "Valor CEMIG", "Benefício Econômico",
-                                    "Corrigido IPCA", "Corrigido IGPM", "Corrigido IGPDI", "Corrigido ICGJ",
-                                    "Honorários IPCA", "Honorários IGPM", "Honorários IGPDI", "Honorários ICGJ"]:
-                            if col in st.session_state.df.columns:
-                                total_row[col] = round(st.session_state.df[col].sum(), 2)
+                    # TOTAL NO FINAL
+                    total_row = {col: "" for col in st.session_state.df.columns}
+                    total_row["Mês referência/Ano cobrança"] = "TOTAL"
+                    for col in ["Valor conquistado na AÇÃO", "Valor CEMIG", "Benefício Econômico",
+                                "Corrigido IPCA", "Corrigido IGPM", "Corrigido IGPDI", "Corrigido ICGJ",
+                                "Honorários IPCA", "Honorários IGPM", "Honorários IGPDI", "Honorários ICGJ"]:
+                        if col in st.session_state.df.columns:
+                            total_row[col] = round(st.session_state.df[col].sum(), 2)
 
-                        df_sem_total = st.session_state.df[st.session_state.df["Mês referência/Ano cobrança"] != "TOTAL"].copy()
-                        st.session_state.df = pd.concat([df_sem_total, pd.DataFrame([total_row])], ignore_index=True)
-                        st.session_state.df = corrigir_tipos(st.session_state.df)
+                    df_sem_total = st.session_state.df[st.session_state.df["Mês referência/Ano cobrança"] != "TOTAL"].copy()
+                    st.session_state.df = pd.concat([df_sem_total, pd.DataFrame([total_row])], ignore_index=True)
+                    st.session_state.df = corrigir_tipos(st.session_state.df)
 
                     st.success("✅ Consulta BACEN concluída!")
 
@@ -700,4 +722,4 @@ elif st.session_state.get("raw_df") is not None and not st.session_state.raw_df.
 else:
     st.info("Extraia o PDF no Passo 1 para começar.")
 
-st.caption("Versão: v.1.1")
+st.caption("Versão: v.1.2")
