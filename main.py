@@ -249,7 +249,7 @@ current_step = st.session_state.get("current_step", "1️⃣ Passo 1 - Extrair P
 
 for i, (label, emoji) in enumerate(steps):
     with [col1, col2, col3, col4, col5][i]:
-        if st.button(label, use_container_width=True,
+        if st.button(label, width="stretch",
                      type="primary" if current_step.startswith(emoji) else "secondary"):
             st.session_state.current_step = label
             st.rerun()
@@ -261,7 +261,7 @@ if current_step.startswith("1️⃣"):
     st.subheader("1️⃣ Passo 1 - Extrair PDF")
     uploaded_file = st.file_uploader("Selecione o arquivo PDF da planilha CEMIG", type=["pdf"])
     
-    if st.button("Extrair Tabelas do PDF", type="primary", use_container_width=True):
+    if st.button("Extrair Tabelas do PDF", type="primary", width="stretch"):
         if uploaded_file:
             try:
                 with st.spinner("Extraindo tabelas do PDF..."):
@@ -278,7 +278,7 @@ elif current_step.startswith("2️⃣"):
     if st.session_state.raw_df is None:
         st.warning("Volte ao Passo 1 e extraia o PDF primeiro.")
     else:
-        if st.button("Processar Colunas e Cálculos Iniciais", type="primary", use_container_width=True):
+        if st.button("Processar Colunas e Cálculos Iniciais", type="primary", width="stretch"):
             try:
                 with st.spinner("Processando..."):
                     df = st.session_state.raw_df.copy()
@@ -340,23 +340,29 @@ elif current_step.startswith("3️⃣"):
         st.write("**Data do Trânsito em Julgado:**")
         col_date, _ = st.columns([1.2, 2.8])
         with col_date:
-            data_transito = st.date_input("", label_visibility="collapsed")
+            data_transito = st.date_input("Data do Trânsito em Julgado", label_visibility="collapsed")
 
         st.write("**Quantidade de novas parcelas a projetar:**")
         col_qty, col_add, col_del = st.columns([1, 1, 1])
         with col_qty:
-            quantidade = st.number_input("", min_value=1, value=12, step=1, label_visibility="collapsed")
+            quantidade = st.number_input("Quantidade de novas parcelas", min_value=1, value=12, step=1, label_visibility="collapsed")
         with col_add:
-            if st.button("➕ Adicionar", type="primary", use_container_width=True):
+            if st.button("➕ Adicionar", type="primary", width="stretch"):
                 try:
-                    ultima_referencia = st.session_state.df["referencia"].iloc[-1]
+                    # Converter data de trânsito para formato YYYYMM
+                    referencia_transito = data_transito.strftime("%Y%m")
+                    
                     ultima_linha = st.session_state.df.iloc[-1].copy()
 
                     novas_linhas = []
-                    referencia_atual = ultima_referencia
+                    referencia_atual = referencia_transito
 
-                    for _ in range(quantidade):
-                        referencia_atual = add_meses_yyyymm(referencia_atual, 1)
+                    for i in range(quantidade):
+                        if i == 0:
+                            # Primeira parcela começa na data de trânsito
+                            pass
+                        else:
+                            referencia_atual = add_meses_yyyymm(referencia_atual, 1)
                         nova_linha = ultima_linha.copy()
                         mes_nome = list(MESES.keys())[int(referencia_atual[4:]) - 1]
                         ano = referencia_atual[:4]
@@ -388,7 +394,7 @@ elif current_step.startswith("3️⃣"):
                     st.error(f"Erro ao adicionar parcelas: {e}")
 
         with col_del:
-            if st.button("🗑️ Excluir Todas as Parcelas Projetadas", type="secondary", use_container_width=True):
+            if st.button("🗑️ Excluir Todas as Parcelas Projetadas", type="secondary", width="stretch"):
                 if len(st.session_state.df) > len(st.session_state.df_original):
                     st.session_state.df = st.session_state.df_original.copy().reset_index(drop=True)
                     st.session_state.df = corrigir_tipos(st.session_state.df)
@@ -416,7 +422,7 @@ elif current_step.startswith("4️⃣"):
             
             col_button, _ = st.columns([1.2, 2.8])
             with col_button:
-                if st.button("🔄 Aplicar Filtro", type="secondary", use_container_width=True):
+                if st.button("🔄 Aplicar Filtro", type="secondary", width="stretch"):
                     if filtro_referencia:
                         ref_base = converter_referencia_yyyymm(filtro_referencia)
                         df_filtrado = st.session_state.df[st.session_state.df["referencia"] >= ref_base].copy().reset_index(drop=True)
@@ -442,7 +448,7 @@ elif current_step.startswith("4️⃣"):
             with col_i:
                 indice_fornecedor = st.selectbox("📊 Índice:", ["IPCA", "IGPM", "IGP-DI", "ICGJ", "Outros"], key="ind_forn")
             
-            if st.button("🚀 Atualizar Fornecedor", type="primary", use_container_width=True):
+            if st.button("🚀 Atualizar Fornecedor", type="primary", width="stretch"):
                 if valor_fornecedor <= 0:
                     st.warning("❌ Valor do Fornecedor deve ser maior que zero.")
                 else:
@@ -495,7 +501,7 @@ elif current_step.startswith("4️⃣"):
             with col_i2:
                 indice_contrato = st.selectbox("📊 Índice:", ["IPCA", "IGPM", "IGP-DI", "ICGJ", "Outros"], key="ind_conq")
             
-            if st.button("🚀 Atualizar Conquistado", type="primary", use_container_width=True):
+            if st.button("🚀 Atualizar Conquistado", type="primary", width="stretch"):
                 if valor_conquistado <= 0:
                     st.warning("❌ Valor conquistado deve ser maior que zero.")
                 else:
@@ -541,15 +547,15 @@ elif current_step.startswith("4️⃣"):
 # ====================== PASSO 5 ======================
 elif current_step.startswith("5️⃣"):
     st.subheader("5️⃣ Passo 5 - Consultar BACEN & Exportar")
-    st.checkbox("✓ Considerar Índices Negativos?", value=st.session_state.get("considerar_neg_global", False), key="considerar_neg_global")
+    st.checkbox("Padronizar Índices Negativos para 1.0?", value=st.session_state.get("considerar_neg_global", False), key="considerar_neg_global")
     
     col_num, col_cons, col_exp = st.columns([1, 1, 1])
     with col_num:
         st.write("**Honorários (%):**")
-        percentual_honorarios = st.number_input("", min_value=0.0, max_value=100.0, value=0.0, step=0.01, key="percentual_honorarios", label_visibility="collapsed")
+        percentual_honorarios = st.number_input("Percentual de Honorários", min_value=0.0, max_value=100.0, value=0.0, step=0.01, key="percentual_honorarios", label_visibility="collapsed")
     with col_cons:
         st.write("**Consultar dados no BACEN:**")
-        if st.button("🔍 BACEN", type="secondary", use_container_width=True):
+        if st.button("🔍 BACEN", type="secondary", width="stretch"):
             if st.session_state.df is not None:
                     with st.spinner("Consultando BACEN..."):
                         considerar_neg = st.session_state.get("considerar_neg_global", False)
@@ -624,7 +630,7 @@ elif current_step.startswith("5️⃣"):
 
     with col_exp:
         st.write("**Exportar tabela final para excel:**")
-        if st.button("📥 Excel", type="primary", use_container_width=True):
+        if st.button("📥 Excel", type="primary", width="stretch"):
             if st.session_state.df is not None:
                 output = BytesIO()
                 with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -678,7 +684,7 @@ if st.session_state.get("df") is not None and not st.session_state.df.empty:
     
     st.dataframe(
         styler,
-        use_container_width=True,
+        width="stretch",
         height=720,
         hide_index=True
     )
@@ -686,7 +692,7 @@ if st.session_state.get("df") is not None and not st.session_state.df.empty:
 elif st.session_state.get("raw_df") is not None and not st.session_state.raw_df.empty:
     st.dataframe(
         st.session_state.raw_df,
-        use_container_width=True,
+        width="stretch",
         height=720,
         hide_index=True
     )
